@@ -1,0 +1,285 @@
+local version = 1.0
+
+-- ============================================================
+-- Billboard object used in redirection
+-- ============================================================
+
+local Billboard = {}
+Billboard.__index = function(table, key)
+  return Billboard[key](table)
+end
+Billboard.__tostring = function() return "Billboard" end
+
+function Billboard.toBillboardCoordinates(billboard, monitor, x, y)
+  for m = 1, #billboard.monitors do
+    if billboard.monitors[m].name == monitor then
+      return x + billboard.monitors[m].offsetX, y + billboard.monitors[m].offsetY
+    end
+  end
+end
+
+-- ============================================================
+-- Term API higher order functions
+-- ============================================================
+
+function Billboard.write(billboard)
+  return function(text)
+    for m = 1, #billboard.monitors do
+      billboard.monitors[m].monitor.write(text)
+    end
+  end
+end
+
+function Billboard.clear(billboard)
+  return function()
+    for m = 1, #billboard.monitors do
+      billboard.monitors[m].monitor.clear()
+    end
+  end
+end
+
+function Billboard.clearLine(billboard)
+  return function()
+    for m = 1, #billboard.monitors do
+      billboard.monitors[m].monitor.clearLine()
+    end
+  end
+end
+
+function Billboard.getCursorPos(billboard)
+  return function()
+    local x, y = billboard.monitors[1].monitor.getCursorPos()
+    return x + billboard.monitors[1].offsetX, y + billboard.monitors[1].offsetY
+  end
+end
+
+function Billboard.setCursorPos(billboard)
+  return function(x, y)
+    for m = 1, #billboard.monitors do
+      billboard.monitors[m].monitor.setCursorPos(x - billboard.monitors[m].offsetX, y - billboard.monitors[m].offsetY)
+    end
+  end
+end
+
+function Billboard.setCursorBlink(billboard)
+  return function(blink)
+    for m = 1, #billboard.monitors do
+      billboard.monitors[m].monitor.setCursorBlink(blink)
+    end
+  end
+end
+
+function Billboard.isColor(billboard)
+  return function()
+    local result = true
+    for m = 1, #billboard.monitors do
+      result = result and billboard.monitors[m].monitor.isColor()
+    end
+    return result
+  end
+end
+
+function Billboard.isColour(billboard)
+  return Billboard.isColor(billboard)
+end
+
+function Billboard.getSize(billboard)
+  return function()
+    local w = 0
+    local h = 0
+    for m = 1, #billboard.monitors do
+      local mw, mh = billboard.monitors[m].monitor.getSize()
+      w = math.max(w, mw + billboard.monitors[m].offsetX)
+      h = math.max(h, mh + billboard.monitors[m].offsetY)
+    end
+    return w, h
+  end
+end
+
+function Billboard.scroll(billboard)
+  return function(n)
+    error("scroll Not Implemented")
+  end
+end
+
+function Billboard.setTextColor(billboard)
+  return function(color)
+    for m = 1, #billboard.monitors do
+      billboard.monitors[m].monitor.setTextColor(color)
+    end
+  end
+end
+
+function Billboard.setTextColour(billboard)
+  return Billboard.setTextColor(billboard)
+end
+
+function Billboard.setBackgroundColor(billboard)
+  return function(color)
+    for m = 1, #billboard.monitors do
+      billboard.monitors[m].monitor.setBackgroundColor(color)
+    end
+  end
+end
+
+function Billboard.setBackgroundColour(billboard)
+  return Billboard.setBackgroundColor(billboard)
+end
+
+
+-- ============================================================
+-- Other functions
+-- ============================================================
+
+local function createBillboard(setup)
+  local b = { monitors = {} }
+
+  for m = 1, #setup do
+    local mon = {}
+    mon.name = "monitor_" .. setup[m][1]
+    mon.monitor = peripheral.wrap(mon.name)
+    mon.offsetX = setup[m][2]
+    mon.offsetY = setup[m][3]
+    table.insert(b.monitors, mon)
+  end
+
+  return setmetatable(b, Billboard)
+end
+
+local function printUsage()
+  print( "Usage: ")
+  print( "- billboard info" )
+  print( "- billboard scale <value>" )
+  print( "- billboard setup <settings> <arguments>" )
+  print( "- billboard run <settings> <program> <arguments>" )
+  return
+end
+
+local function saveSettings(settings, filename)
+  local file = fs.open(filename, "w")
+  file.write(textutils.serialize(settings))
+  file.close()
+end
+
+local function loadSettings(filename)
+  if fs.exists(filename) then
+    local file = fs.open(filename, "r")
+    local settings = textutils.unserialize(file.readAll())
+    file.close()
+    return settings
+  else
+    return nil
+  end
+end
+
+local function doOnAllMonitors(action)
+  for _, side in ipairs(peripheral.getNames()) do
+    if peripheral.getType( side ) == "monitor" then
+      local wrap = peripheral.wrap(side)
+      action(wrap, side)
+    end
+  end
+end
+
+
+-- ============================================================
+-- Main Program
+-- ============================================================
+
+local tArgs = { ... }
+if #tArgs < 1 then
+  printUsage()
+  return
+end
+
+if tArgs[1] == "setup" then
+  local sSettingsPath = tArgs[2]
+  local settings = {}
+  local i = 3
+  while i < #tArgs do
+    local m = { tonumber(tArgs[i]), tonumber(tArgs[i+1]), tonumber(tArgs[i+2])}
+    table.insert(settings, m)
+    i = i + 3
+  end
+  saveSettings(settings, sSettingsPath)
+  return
+end
+
+if tArgs[1] == "info" then
+  doOnAllMonitors(function(mon, name)
+    mon.clear()
+    mon.setCursorPos(1, 1)
+    mon.write("Monitor name: " .. name)
+    local x, y = mon.getSize()
+    mon.setCursorPos(1, 2)
+    mon.write("Size: " .. tostring(x) .. ", " .. tostring(y))
+  end)
+  return
+end
+
+if tArgs[1] == "scale" then
+  doOnAllMonitors(function(mon)
+    mon.setTextScale(tonumber(tArgs[2]))
+  end)
+  print("Scale set to " .. tArgs[2] .. " on all monitors.")
+  return
+end
+
+if tArgs[1] ~= "run" then
+  print("Unknown command: "..tArgs[1])
+  printUsage()
+  return
+end
+
+local sSettingsPath = tArgs[2]
+local tSettings = loadSettings(sSettingsPath)
+if tSettings == nil then
+  print("No such settings file: "..sSettingsPath)
+  return
+end
+
+local sProgram = tArgs[3]
+local sPath = shell.resolveProgram( sProgram )
+if sPath == nil then
+  print( "No such program: "..sProgram )
+  return
+end
+
+local billboard = createBillboard(tSettings)
+
+term.redirect( billboard )
+
+local co = coroutine.create( function()
+  shell.run( sProgram, unpack( tArgs, 4 ) )
+end )
+
+local function resume( ... )
+  local ok, param = coroutine.resume( co, ... )
+  if not ok then
+    printError( param )
+  end
+  return param
+end
+
+local ok, param = pcall( function()
+  local sFilter = resume()
+  while coroutine.status( co ) ~= "dead" do
+    local tEvent = { os.pullEventRaw() }
+    if sFilter == nil or tEvent[1] == sFilter or tEvent[1] == "terminate" then
+      sFilter = resume( unpack( tEvent ) )
+    end
+    if coroutine.status( co ) ~= "dead" and (sFilter == nil or sFilter == "mouse_click") then
+      if tEvent[1] == "monitor_touch" then --and tEvent[2] == sSide then
+        local x, y = Billboard.toBillboardCoordinates(billboard, unpack( tEvent, 2 ))
+        if x then
+          sFilter = resume( "mouse_click", 1, x, y )
+        end
+      end
+    end
+  end
+end )
+
+term.restore()
+if not ok then
+  printError( param )
+end
